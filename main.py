@@ -5,6 +5,8 @@ from discord import app_commands
 import yt_dlp as youtube_dl
 import asyncio
 from dotenv import load_dotenv
+import aiohttp
+import random
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -14,6 +16,8 @@ intents.message_content = True
 intents.messages = True
 intents.guilds = True
 intents.voice_states = True
+channel_id = 1311745347848110091 
+url = "https://www.vicinityclo.de/products/akimbo-lows-pristina-moss"
 
 GUILD_ID = discord.Object(id=os.getenv('GUILD_ID'))
 
@@ -42,10 +46,10 @@ class MusicControls(discord.ui.View):
 
     @discord.ui.button(label="Volver", style=discord.ButtonStyle.green)
     async def volver(self, button: discord.ui.Button, interaction: discord.Interaction):
+        global contador
         if len(song_queue) > 1:
-            song_queue.insert(0, song_queue.pop(1))
- 
-            await play_music(song_queue[0]['url'])
+            contador -= 1
+            await play_music(song_queue[contador])
    
 
     @discord.ui.button(label="Adelante", style=discord.ButtonStyle.green)
@@ -53,7 +57,7 @@ class MusicControls(discord.ui.View):
         contador = 0
         if len(song_queue) > 1:
             contador += 1
-            await play_music(song_queue.pop(contador)['url'])
+            await play_music(song_queue[contador])
 
 
     @discord.ui.button(label="Pausar", style=discord.ButtonStyle.red)
@@ -92,6 +96,7 @@ async def play_music(url):
 @client.tree.command(name="ping", description="Comando de prueba")
 async def ping(ctx: discord.Interaction):
     await ctx.response.send_message(f"Pong! {round(client.latency * 1000)}ms")
+    print("Comando ping ejecutado.")
 
 
 @client.tree.command(name="musica", description="Reproducir música")
@@ -106,17 +111,14 @@ async def musica(ctx: discord.Interaction, url: str):
             voice_client = ctx.guild.voice_client
             if voice_client.channel != voice_channel:
                 await voice_client.move_to(voice_channel)
-                await ctx.followup.send(f"Me he movido al canal {voice_channel.name}.")
-            else:
-                await ctx.followup.send(f"Ya estoy en el canal {voice_channel.name}.")
         else:
             voice_client = await voice_channel.connect()
             await ctx.followup.send(f"Conectado al canal {voice_channel.name}")
 
-        song_queue.append({'url': url, 'title': url})  # Agregar canción a la cola
+        song_queue.append({'url': url, 'title': url})
 
-        if len(song_queue) == 1:
-            await play_music(url)  # Si es la primera canción, la reproduce inmediatamente
+        if len(song_queue) >= 1:
+            await play_music(url)
 
         await ctx.followup.send(f"Agregado a la cola: {url}")
         view = MusicControls()
@@ -134,21 +136,63 @@ async def stop(ctx: discord.Interaction):
     if voice_client and voice_client.is_connected():
         await voice_client.disconnect()
         if current_song and os.path.exists(current_song):
-            os.remove(current_song)  # Eliminar el archivo de música cuando se detiene
-        await ctx.response.send_message("Reproducción detenida y archivo eliminado.")
+            os.remove(current_song)
+        await ctx.response.send_message("Reproducción detenida, saliendo...")
 
+
+def get_random_time():
+    """Genera un número aleatorio entre 30 y 60 segundos."""
+    return random.randint(30, 60)
+
+# Función de verificación HTTP
+
+async def check_http_and_notify():
+    print("Verificando la URL...")  # Verificamos si esta línea se imprime
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                status = response.status
+                print(f"Estado HTTP: {status}")  # Depuración adicional para ver el estado
+        return status
+    except Exception as e:
+        print(f"Error al verificar la URL: {e}")
+
+# Bucle que ejecuta la función de manera continua
+@client.command()
+async def req(ctx):
+    await ctx.send("Comando ejecutando...")
+    print("Iniciando el bucle principal...")  # Depuración para ver si entra en el bucle
+    while True:
+        try:
+            status = await check_http_and_notify()
+            if status == 200:
+                print("Código 200 encontrado, enviando mensaje a Discord.")
+                await ctx.send("¡La URL ha respondido con un código 200!")
+            else:
+                print(f"Respuesta HTTP: {status}. No se envió mensaje.")
+                await ctx.send(f"¡La URL no está disponible, código {status}!")              # Llamar a la función que hace la solicitud HTTP
+        except Exception as e:
+            print(f"Error al verificar la URL: {e}")
+        
+        # Espera aleatoria entre 30 y 60 segundos antes de hacer otra solicitud
+        await asyncio.sleep(get_random_time())
+
+
+@client.tree.command(name="hola", description="Comando de prueba")
+async def hola(ctx: discord.Interaction):
+    await ctx.response.send_message('¡Hola! ¿Cómo estás?')
 
 @client.event
 async def on_voice_state_update(member, before, after):
     global voice_client, current_song
 
     if before.channel is not None and member == client.user:
-        if len(before.channel.members) == 1:  # Si el bot está solo en el canal
+        if len(before.channel.members) == 1: 
             voice_client = discord.utils.get(client.voice_clients, guild=member.guild)
             if voice_client and voice_client.is_connected():
                 await voice_client.disconnect()
-                if current_song and os.path.exists(current_song):
-                    os.remove(current_song)  # Eliminar el archivo de música
+                song_queue = []
+                os.remove("downloads/")
                 print("Bot desconectado por inactividad y archivo de música eliminado.")
 
 
@@ -157,7 +201,7 @@ async def on_ready():
     await client.change_presence(status=discord.Status.online, activity=discord.Game('/help'))
     print(f'{client.user} has connected to Discord!')
     try:
-        await client.tree.sync()
+        await client.tree.sync(guild=GUILD_ID)
         print("Comandos de aplicación sincronizados con el servidor.")
     except Exception as e:
         print(f"Error al sincronizar comandos: {e}")
@@ -165,11 +209,11 @@ async def on_ready():
     print(f'{client.user} se ha conectado a Discord!')
 
 
+
 @client.event
 async def on_message(message):
     if message.author == client.user:
         return
-
     await client.process_commands(message)
 
 client.run(TOKEN)
